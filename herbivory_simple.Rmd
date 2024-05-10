@@ -1,0 +1,654 @@
+---
+title: "Herbivory Wrangling & Analysis - Simple"
+output: html_document
+date: "2024-03-11"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+I have created a simplified script below of my herbivory data wrangling and analysis to allow easy reproduction of my results. 
+
+# Background 
+
+To determine the impact of soil microbiome inoculation and basalt addition on ecological activity at a temperate forest restoration site, I have measured leaf herbivory levels as an aboveground proxy. I sampled ~1 individual of each tree species per plot and selected 2-4 branches per tree. I then counted the number of leaves on each branch and inspected each leaf for herbivory damage from herbivores: either leaf chewing, grazing, mines or leaf roll. I then assigned each leaf a damage category (i.e., how much of total surface area on that leaf is damaged): 0%, 1-5%, 5-10%, 10-30%, 30-60% or 60-100%. 
+
+# Loading packages and data
+
+Loading useful packages: 
+
+```{r}
+library(AICcmodavg)
+library(arm)
+library(cowplot)
+library(DAAG)
+library(faraway)
+library(ggfortify)
+library(ggplot2)
+library(lme4)
+library(MASS)
+library(nlme)
+library(quarto)
+library(SemiPar)
+library(Sleuth3)
+library(SMPracticals)
+library(tidyverse)
+library(dplyr)
+library(lmerTest)
+```
+
+Reading in my raw herbivory data and calling it "herbivory_data_raw": 
+
+```{r}
+herbivory_data_raw <- read_csv("/Users/dorasolloway/Documents/Wadham/Year_4/Masters_project/Herbivory_stats/herbivory_data_raw.csv")
+```
+
+# Data wrangling 
+
+Removing empty rows & columns:
+
+```{r}
+herbivory_data_clean <- herbivory_data_raw %>% # Renaming herbivory_data_raw as herbivory_data_clean
+  filter(!is.na(plot)) %>% # Removing empty rows from the dataset
+  select(!...23) # Removing an empty column from the dataset
+```
+
+Converting variables to factors:
+
+```{r}
+herbivory_data_clean$block <- factor(herbivory_data_clean$block)
+herbivory_data_clean$plot <- factor(herbivory_data_clean$plot)
+herbivory_data_clean$treatment <- factor(herbivory_data_clean$treatment)
+herbivory_data_clean$basalt_present <- factor(herbivory_data_clean$basalt_present)
+herbivory_data_clean$microbiome_present <- factor(herbivory_data_clean$microbiome_present)
+herbivory_data_clean$species <- factor(herbivory_data_clean$species)
+herbivory_data_clean$tree_id <- factor(herbivory_data_clean$tree_id)
+```
+
+# Calculating a herbivory score
+
+I will calculate a "herbivory score" for each branch by multiplying the midpoint of each damage category by the number of leaves in that category, adding these together and then dividing by the total number of leaves. This will be my response variable. 
+
+```{r}
+herbivory_score_data <- herbivory_data_clean %>% 
+  mutate(herbivory_score = ((3 * `1_to_5_percent_damage`) + (7.5 * `5_to_10_percent_damage`) + 
+              (20 * `10_to_30_percent_damage`) + (45 * `30_to_60_percent_damage`) + 
+              (80 * `60_to_100_percent_damage`)) / total_leaves) 
+```
+
+# Saving the dataframe
+
+I will save this new dataframe so that it can be read into a new script if needed and analysed without needing to re-run the wrangling steps each time:
+
+```{r}
+#write_csv(herbivory_score_data, "herbivory_score_data.csv")
+```
+
+# Converting variables to factors
+
+```{r}
+herbivory_score_data$block <- factor(herbivory_score_data$block)
+herbivory_score_data$plot <- factor(herbivory_score_data$plot)
+herbivory_score_data$treatment <- factor(herbivory_score_data$treatment)
+herbivory_score_data$basalt_present <- factor(herbivory_score_data$basalt_present)
+herbivory_score_data$microbiome_present <- factor(herbivory_score_data$microbiome_present)
+herbivory_score_data$species <- factor(herbivory_score_data$species)
+herbivory_score_data$tree_id <- factor(herbivory_score_data$tree_id)
+```
+
+# Model making, assumption checking & transformations
+
+I will make a mixed-effects linear model with herbivory score as the response variable; basalt addition (applied or not applied), microbiome innoculation (applied or not applied) and tree species (oak, alder, aspen, birch, cherry or rowan) as the fixed effects; and block (n = 8), plot (n = 32) and tree ID (n = 189) as the random effects:
+
+```{r}
+herbivory_mem <- lmer(herbivory_score ~ 
+                        basalt_present * microbiome_present * species + 
+                        (1|block) + (1|plot) + (1|tree_id), 
+                      data = herbivory_score_data)
+```
+
+Checking the assumptions of the model:
+
+```{r}
+plot(herbivory_mem)
+qqnorm(resid(herbivory_mem))
+qqline(resid(herbivory_mem))
+```
+
+The assumptions of normality and homogeneity of variance are not well met (e.g., fan-shaped residuals) so I will try logging the response variable (as well as adding 0.1 due to the presence of zero values):
+
+```{r}
+log_herbivory_mem <- lmer(log(herbivory_score + 0.1) ~ 
+                        basalt_present * microbiome_present * species + 
+                        (1|block) + (1|plot) + (1|tree_id), 
+                      data = herbivory_score_data)
+```
+
+```{r}
+plot(log_herbivory_mem)
+qqnorm(resid(log_herbivory_mem))
+qqline(resid(log_herbivory_mem))
+```
+
+The assumptions of homogeneity of variance and normality are much better met. I will therefore use this model for my analyses.
+
+```{r}
+anova(log_herbivory_mem, type = "I")
+```
+
+There is a significant effect of microbiome presence on leaf herbivory levels (p < 0.01). There is also a significant effect of tree species on leaf herbivory levels (p < 0.001). 
+
+```{r}
+summary(log_herbivory_mem)
+```
+
+Leaf herbivory levels increase on average in microbiome plots compared to the alder intercept. Negative sign for basalt treatment compared to alder intercept.
+
+# Filtering the data species-by-species: model making and assumption checking
+
+To determine the species-specific effects, I will now filter the dataset to each species only and re-run the models. 
+
+# Oak
+
+Filtering the data to oak trees:
+
+```{r}
+oak_herbivory <- filter(herbivory_score_data, species=="oak")
+```
+
+Modelling effect of treatments on leaf herbivory in oak trees:
+
+```{r}
+herbivory_oak_mem <- lmer(log(herbivory_score + 0.1) ~ 
+                              basalt_present * microbiome_present + 
+                              (1|block) + (1|plot) + (1|tree_id), 
+                            data = oak_herbivory)
+```
+
+```{r}
+anova(herbivory_oak_mem, type = "I")
+```
+
+There is no significant effect of microbiome presence or basalt addition on leaf herbivory in oak trees.
+
+```{r}
+summary(herbivory_oak_mem)
+```
+
+Negative sign for basalt and microbiome presence for oak trees.
+
+# Alder
+
+Filtering the data to alder trees:
+
+```{r}
+alder_herbivory <- filter(herbivory_score_data, species=="alder")
+```
+
+Modelling effect of treatments on leaf herbivory in alder trees:
+
+```{r}
+herbivory_alder_mem <- lmer(log(herbivory_score + 0.1) ~ 
+                              basalt_present * microbiome_present + 
+                              (1|block) + (1|plot) + (1|tree_id), 
+                            data = alder_herbivory)
+```
+
+```{r}
+anova(herbivory_alder_mem, type = "I")
+```
+
+There is a significant effect of microbiome presence on leaf herbivory in alder trees.
+
+```{r}
+summary(herbivory_alder_mem)
+```
+
+Herbivory is increased under microbiome inoculation for alder trees. Negative sign for basalt.
+
+# Aspen
+
+Filtering the data to aspen trees:
+
+```{r}
+aspen_herbivory <- filter(herbivory_score_data, species=="aspen")
+```
+
+Modelling effect of treatments on leaf herbivory in aspen trees:
+
+```{r}
+herbivory_aspen_mem <- lmer(log(herbivory_score + 0.1) ~ 
+                              basalt_present * microbiome_present + 
+                              (1|block) + (1|plot) + (1|tree_id), 
+                            data = aspen_herbivory)
+```
+
+```{r}
+anova(herbivory_aspen_mem, type = "I")
+```
+
+There is an almost significant effect of microbiome presence on leaf herbivory in aspen trees (p = 0.05641).
+
+```{r}
+summary(herbivory_aspen_mem)
+```
+
+Herbivory is increased under microbiome inoculation for aspen. Negative sign for basalt.
+
+# Birch
+
+Filtering the data to birch trees:
+
+```{r}
+birch_herbivory <- filter(herbivory_score_data, species=="birch")
+```
+
+Modelling effect of treatments on leaf herbivory in birch trees:
+
+```{r}
+herbivory_birch_mem <- lmer(log(herbivory_score + 0.1) ~ 
+                              basalt_present * microbiome_present + 
+                              (1|block) + (1|plot) + (1|tree_id), 
+                            data = birch_herbivory)
+```
+
+```{r}
+anova(herbivory_birch_mem, type = "I")
+```
+
+There is a significant effect of microbiome presence on leaf herbivory in aspen trees.
+
+```{r}
+summary(herbivory_birch_mem)
+```
+
+Herbivory is increased under microbiome inoculation for aspen trees. Positive sign for basalt.
+
+# Cherry
+
+Filtering the data to cherry trees:
+
+```{r}
+cherry_herbivory <- filter(herbivory_score_data, species=="cherry")
+```
+
+Modelling effect of treatments on leaf herbivory in cherry trees:
+
+```{r}
+herbivory_cherry_mem <- lmer(log(herbivory_score + 0.1) ~ 
+                              basalt_present * microbiome_present + 
+                              (1|block) + (1|plot) + (1|tree_id), 
+                            data = cherry_herbivory)
+```
+
+```{r}
+anova(herbivory_cherry_mem, type = "I")
+```
+
+There is a significant effect of basalt addition on leaf herbivory in cherry trees (p < 0.01), but no significant microbiome effect.
+
+```{r}
+summary(herbivory_cherry_mem)
+```
+
+Herbivory is increased under basalt addition for cherry trees. Positive sign for microbiome inoculation.
+
+# Rowan
+
+Filtering the data to rowan trees:
+
+```{r}
+rowan_herbivory <- filter(herbivory_score_data, species=="rowan")
+```
+
+Modelling effect of treatments on leaf herbivory in rowan trees:
+
+```{r}
+herbivory_rowan_mem <- lmer(log(herbivory_score + 0.1) ~ 
+                              basalt_present * microbiome_present + 
+                              (1|block) + (1|plot) + (1|tree_id), 
+                            data = rowan_herbivory)
+```
+
+```{r}
+anova(herbivory_rowan_mem, type = "I")
+```
+
+There are no significant effects of microbiome inoculation or basalt addition on leaf herbivory in rowan trees. However, the p-value for microbiome presence and basalt*microbiome presence are both fairly low, indicating there are still some effects.
+
+```{r}
+summary(herbivory_rowan_mem)
+```
+
+Positive sign for basalt and microbiome presence for rowan.
+
+# Summary of results
+
+Microbiome innoculation results in increased leaf herbivory damage, but the size of these effects depends on the species. For all species except oak, there is still an increase in leaf herbivory under microbiome inoculation, and this is significant for alder and birch, and almost significant for aspen (p < 0.1). In oak trees however, there is a slight decrease in leaf herbivory damage in microbiome plots compared to the control. When modelling the data overall, there appears to be a slight negative effect of basalt addition on leaf herbivory, and this remains true for most of the species when filtered individually, but this is not significant. Instead, there is a significant increase in leaf herbivory damage in basalt plots for cherry trees. Therefore, it is likely that any effects of basalt are weak and species dependent, and are therefore unlikely to be biologically significant at this stage.
+
+# Obtaining means and confidence intervals
+
+I will use the marginal effects package to predict means and standard errors.
+
+Loading the marginal effects package:
+
+```{r}
+library(marginaleffects)
+```
+
+Predicting summary statistics from the model grouped by treatment and species:
+
+```{r}
+log_predictions_herbivory_data <- predictions(log_herbivory_mem, by = c("microbiome_present", "basalt_present", "species"))
+log_predictions_herbivory_data
+```
+
+Comparing between different levels for each factor:
+
+```{r}
+avg_comparisons(log_herbivory_mem)
+```
+
+We can see that there is a significant difference between the estimates for herbivory damage when microbiome innoculation is applied vs not applied (p < 0.001), but there is no significant difference between the estimates for when basalt addition is applied or not applied. This is in agreement with the anova tests above. However, the species to species comparisons in this table are not particularly useful as they are each compared to alder instead of a baseline (i.e., average values across species).
+
+I will now save the predictions dataframe:
+
+```{r}
+#write_csv(log_predictions_herbivory_data, "log_predictions_herbivory_data.csv")
+```
+
+I will read the data back in to view the dataframe as formatting may have changed by saving as a csv file.
+
+```{r}
+log_predictions_herbivory_data <- read_csv("log_predictions_herbivory_data.csv")
+log_predictions_herbivory_data
+```
+
+These predictions are logged so need to I need to back transform (exponentiate and -0.1) the estimates and confidence intervals to get actual estimates: 
+
+```{r}
+predictions_herbivory_data <- log_predictions_herbivory_data %>% 
+  mutate(estimate = exp(estimate) - 0.1,
+         conf.low = exp(conf.low) - 0.1,
+         conf.high = exp(conf.high) - 0.1) %>% 
+  arrange(species)
+                  
+predictions_herbivory_data
+```
+
+Saving the dataframe:
+
+```{r}
+#write_csv(predictions_herbivory_data, "predictions_herbivory_data.csv")
+```
+
+# Data visualisation
+
+I will now load in the predictions dataframe to create graphs using ggplot.
+
+```{r}
+predictions_herbivory_data <- read_csv("predictions_herbivory_data.csv")
+predictions_herbivory_data
+```
+
+Adding in a variable for treatment to make plotting easier:
+
+```{r}
+predictions_herbivory_data <- predictions_herbivory_data %>% 
+  mutate(treatment = case_when(
+    basalt_present == "y" & microbiome_present == "y" ~ "basalt+microbiome",
+    basalt_present == "y" & microbiome_present == "n" ~ "basalt",
+    basalt_present == "n" & microbiome_present == "y" ~ "microbiome",
+    basalt_present == "n" & microbiome_present == "n" ~ "control",
+    TRUE ~ NA_character_
+  ))
+
+predictions_herbivory_data
+```
+
+Need to reorder the factor levels within the dataset:
+
+```{r}
+predictions_herbivory_data$treatment <- factor(predictions_herbivory_data$treatment,
+                                                levels = c("control", "basalt", "microbiome", "basalt+microbiome"))
+```
+
+Plotting predicted means and confidence intervals for herbivory score under different treatments and for different species:
+
+```{r}
+predictions_herbivory_fig1 <- ggplot(predictions_herbivory_data, 
+                                   aes(x = treatment, 
+                                       y = estimate, 
+                                       colour = treatment, group = treatment)) + 
+    geom_errorbar(aes(ymin = conf.low, ymax = conf.high), 
+                  colour="black", width=0.2, position = position_dodge(0.1)) +
+    geom_point(position = position_dodge(0.1), size=3) +
+  scale_color_manual(values=c( "forestgreen", "darkorange", "dodgerblue", "deeppink"), 
+                     labels=c("Control", "Basalt", "Microbiome", "Basalt+Microbiome")) +
+  scale_x_discrete(labels = c( "C", "B", "M", "B+M")) +
+  labs(x = "Treatment", y = "Herbivory Score", title = "Effect of Basalt Addition and Microbiome\nInoculation on Leaf Herbivory Damage") +
+  theme_bw() +
+  theme(axis.text.x = element_text(size = 10),  
+        axis.title.x = element_text(size = 14), 
+        strip.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 10),  
+        axis.title.y = element_text(size = 14),  
+        plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+        legend.title=element_blank()) +
+  facet_wrap(~species, scales = "free_y", 
+             labeller = labeller(species = c("alder" = "Alder", 
+                                             "aspen" = "Aspen",
+                                             "birch" = "Birch", 
+                                             "cherry" = "Cherry",
+                                             "oak" = "Oak",
+                                             "rowan" = "Rowan")))
+
+predictions_herbivory_fig1
+```
+
+*Figure 1: Graph showing the effect of basalt addition and microbiome inoculation on the predicted percentage of leaf area damaged per branch for different species of tree and their confidence intervals, based on mixed-effects model 1*
+
+# Obtaining estimates for treatments overall (not by species)
+
+```{r}
+log_predictions_herbivory_data_overall <- predictions(log_herbivory_mem, by = c("microbiome_present", "basalt_present"))
+log_predictions_herbivory_data_overall
+```
+
+I will now save this dataframe:
+
+```{r}
+#write_csv(log_predictions_herbivory_data_overall, "log_predictions_herbivory_data_overall.csv")
+```
+
+Reading in the dataframe:
+
+```{r}
+log_predictions_herbivory_data_overall <- read_csv("log_predictions_herbivory_data_overall.csv")
+log_predictions_herbivory_data_overall
+```
+
+These predictions are logged so need to exponentiate and -0.1 the estimates and confidence intervalues to get actual values:
+
+```{r}
+predictions_herbivory_data_overall <- log_predictions_herbivory_data_overall %>% 
+  mutate(estimate = exp(estimate) - 0.1, 
+         conf.low = exp(conf.low) - 0.1,
+         conf.high = exp(conf.high) - 0.1)
+                  
+predictions_herbivory_data_overall
+```
+
+Saving the dataframe:
+
+```{r}
+#write_csv(predictions_herbivory_data_overall, "predictions_herbivory_data_overall.csv")
+```
+
+I will now load in the predictions dataframe to create graphs using ggplot.
+
+```{r}
+predictions_herbivory_data_overall <- read_csv("predictions_herbivory_data_overall.csv")
+```
+
+Adding in a variable for treatment to make plotting easier:
+
+```{r}
+predictions_herbivory_data_overall <- predictions_herbivory_data_overall %>% 
+  mutate(treatment = case_when(
+    basalt_present == "y" & microbiome_present == "y" ~ "basalt+microbiome",
+    basalt_present == "y" & microbiome_present == "n" ~ "basalt",
+    basalt_present == "n" & microbiome_present == "y" ~ "microbiome",
+    basalt_present == "n" & microbiome_present == "n" ~ "control",
+    TRUE ~ NA_character_
+  ))
+
+predictions_herbivory_data_overall
+```
+
+Need to reorder the factor levels within the dataset:
+
+```{r}
+predictions_herbivory_data_overall$treatment <- factor(predictions_herbivory_data_overall$treatment,
+                                                levels = c("control", "basalt", "microbiome", "basalt+microbiome"))
+```
+
+Plotting predicted means and confidence intervals for herbivory score under different treatments and for different species:
+
+```{r}
+predictions_herbivory_fig2 <- ggplot(predictions_herbivory_data_overall, 
+                                   aes(x = treatment, 
+                                       y = estimate, 
+                                       colour = treatment, group = treatment)) + 
+    geom_errorbar(aes(ymin = conf.low, ymax = conf.high), 
+                  colour="black", width=.3, linewidth= 0.5, position = position_dodge(0.1)) +
+    geom_point(position = position_dodge(0.1), size=4) +
+  scale_color_manual(values=c( "forestgreen", "darkorange", "dodgerblue", "deeppink"), 
+                     labels=c("Control", "Basalt", "Microbiome", "Basalt+Microbiome")) +
+  scale_x_discrete(labels = c( "C", "B", "M", "B+M")) +
+  labs(x = "Treatment", y = "Herbivory Score", title = "Herbivory Damage") +
+  theme_bw() +
+  theme(axis.text.x = element_text(size = 10),  
+        axis.title.x = element_text(size = 14), 
+        strip.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 10),  
+        axis.title.y = element_text(size = 14),  
+        plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+        aspect.ratio = 0.9,
+        legend.title=element_blank()) 
+
+predictions_herbivory_fig2
+```
+
+*Figure 2: Graph showing the effect of basalt addition and microbiome inoculation on the overall predicted percentage of leaf area damaged per branch and their confidence intervals, based on mixed-effects model 1*
+
+From the above graph we can see that overall, mean branch herbivory score is increased significantly in microbiome plots.
+
+# Saving the plots
+
+```{r}
+ggsave("herbivory_species_fig.png", plot = predictions_herbivory_fig1, width = 9, height = 6)
+```
+
+```{r}
+ggsave("herbivory_overall_fig.png", plot = predictions_herbivory_fig2, width = 8, height = 6)
+```
+
+# Determining the effects of microbiome innoculation only
+
+I will now extract the estimates and confidence intervals for microbiome presence and absence only for my results section:
+
+```{r}
+log_predictions_microbiome_herbivory_data <- predictions(log_herbivory_mem, by = c("microbiome_present"))
+log_predictions_microbiome_herbivory_data
+```
+
+Back-transforming estimates and confidence intervals:
+
+```{r}
+predictions_microbiome_herbivory_data <- log_predictions_microbiome_herbivory_data %>% 
+  mutate(estimate = exp(estimate) - 0.1, 
+         conf.low = exp(conf.low) - 0.1,
+         conf.high = exp(conf.high) - 0.1)
+                  
+predictions_microbiome_herbivory_data
+```
+
+Species-specific effects:
+
+```{r}
+log_predictions_microbiome_herbivory_data_species <- predictions(log_herbivory_mem, by = c("microbiome_present", "species"))
+log_predictions_microbiome_herbivory_data_species %>% 
+  arrange(species)
+```
+
+Back-transforming estimates and confidence intervals:
+
+```{r}
+predictions_microbiome_herbivory_data_species <- log_predictions_microbiome_herbivory_data_species %>% 
+  mutate(estimate = exp(estimate) - 0.1, 
+         conf.low = exp(conf.low) - 0.1,
+         conf.high = exp(conf.high) - 0.1)
+                  
+predictions_microbiome_herbivory_data_species
+```
+
+# Determining the effects of basalt addition only
+
+I will now extract the estimates and confidence intervals for basalt presence and absence only for my results section:
+
+```{r}
+log_predictions_basalt_herbivory_data <- predictions(log_herbivory_mem, by = c("basalt_present"))
+log_predictions_basalt_herbivory_data
+```
+
+Back-transforming estimates and confidence intervals:
+
+```{r}
+predictions_basalt_herbivory_data <- log_predictions_basalt_herbivory_data %>% 
+  mutate(estimate = exp(estimate) - 0.1, 
+         conf.low = exp(conf.low) - 0.1,
+         conf.high = exp(conf.high) - 0.1)
+                  
+predictions_basalt_herbivory_data
+```
+
+Species-specific effects:
+
+```{r}
+log_predictions_basalt_herbivory_data_species <- predictions(log_herbivory_mem, by = c("basalt_present", "species"))
+log_predictions_basalt_herbivory_data_species
+```
+
+Back-transforming estimates and confidence intervals:
+
+```{r}
+predictions_basalt_herbivory_data_species <- log_predictions_basalt_herbivory_data_species %>% 
+  mutate(estimate = exp(estimate) - 0.1, 
+         conf.low = exp(conf.low) - 0.1,
+         conf.high = exp(conf.high) - 0.1)
+                  
+predictions_basalt_herbivory_data_species
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

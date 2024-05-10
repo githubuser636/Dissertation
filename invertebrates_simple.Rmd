@@ -1,0 +1,437 @@
+---
+title: "Invertebrate Abundance Wrangling & Statistics - Simple"
+output: html_document
+date: "2024-03-26"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Below is a simplified script of my invertebrate abundance data wrangling & analysis.
+
+# Background 
+
+Invertebrate abundance data was collected by tree-beating in July & August of 2023. 
+
+# Loading packages and data
+
+```{r}
+library(AICcmodavg)
+library(arm)
+library(cowplot)
+library(DAAG)
+library(faraway)
+library(ggfortify)
+library(ggplot2)
+library(lme4)
+library(MASS)
+library(nlme)
+library(quarto)
+library(SemiPar)
+library(Sleuth3)
+library(SMPracticals)
+library(tidyverse)
+library(dplyr)
+library(lmerTest)
+```
+
+Loading in raw data:
+
+```{r}
+invert_data_raw <- read_csv("/Users/dorasolloway/Documents/Wadham/Year_4/Masters_project/invert_stats/TCC_beating.csv")
+```
+
+# Data wrangling
+
+Cleaning names and filtering by species:
+
+```{r}
+invert_data_clean <- invert_data_raw %>% 
+  clean_names() %>% 
+  filter(tree_sp == "Oak"| tree_sp == "Alder" | tree_sp == "Birch") # The invertebrate dataset only includes oak, alder, birch and sitka spruce trees. My project focuses on broadleaves only so I will fitler out sitka
+```
+
+Adding in variables for basalt addition, microbiome innoculation and treatment - will do this by loading in another dataset and joining these columns by plot number. 
+
+```{r}
+# Reading in herbivory dataset with plot and treatment information 
+herbivory_data <- read_csv("/Users/dorasolloway/Documents/Wadham/Year_4/Masters_project/Herbivory_stats/herbivory_data_raw.csv")
+
+treatment_data <- herbivory_data %>% 
+  select(plot, treatment, basalt_present, microbiome_present)
+
+# Joining treatment data with invertebrate data
+invert_treatment_data <- invert_data_clean %>% 
+  select(block, plot, tree_sp, tree_ref, class, order, family, genus, species, abundance, juv, comment) %>% 
+  left_join(treatment_data, by = "plot") 
+
+# Removing repeated rows
+invert_data_unique <- distinct(invert_treatment_data)
+```
+
+Filtering out observations with empty values for treatment (mistake in the data for the plot number):
+
+```{r}
+invert_data_unique <- invert_data_unique %>% 
+  filter(!is.na(treatment))
+```
+
+# Converting variables to factors
+
+```{r}
+invert_data_unique$block <- factor(invert_data_unique$block)
+invert_data_unique$plot <- factor(invert_data_unique$plot)
+invert_data_unique$tree_sp <- factor(invert_data_unique$tree_sp)
+invert_data_unique$tree_ref <- factor(invert_data_unique$tree_ref)
+invert_data_unique$class <- factor(invert_data_unique$class)
+invert_data_unique$order <- factor(invert_data_unique$order)
+invert_data_unique$family <- factor(invert_data_unique$family)
+invert_data_unique$genus <- factor(invert_data_unique$genus)
+invert_data_unique$species <- factor(invert_data_unique$species)
+invert_data_unique$juv <- factor(invert_data_unique$juv)
+invert_data_unique$treatment <- factor(invert_data_unique$treatment)
+invert_data_unique$basalt_present <- factor(invert_data_unique$basalt_present)
+invert_data_unique$microbiome_present <- factor(invert_data_unique$microbiome_present)
+invert_data_unique$abundance <- as.numeric(invert_data_unique$abundance)
+```
+
+# Model making, assumption checking and transformations
+
+Will make a linear mixed effects model to determine the impact of the treatments on invertebrate abundance:
+
+```{r}
+invert_abundance_mem <- lmer(abundance ~ basalt_present * microbiome_present * tree_sp + 
+                               (1|block) + (1|plot) + (1|tree_ref), 
+                             data = invert_data_unique)
+```
+
+Checking the assumptions of the model: 
+
+```{r}
+plot(invert_abundance_mem)
+qqnorm(resid(invert_abundance_mem))
+qqline(resid(invert_abundance_mem))
+```
+
+The assumptions of normality is well met but not homogeneity of variance - extreme fan shape indicates data exhibits heteroscedasticity. Need to transform data.
+
+```{r}
+log_invert_mem <- lmer(log(abundance) ~ basalt_present * microbiome_present * tree_sp + 
+                               (1|block) + (1|plot) + (1|tree_ref), data = invert_data_unique)
+```
+
+```{r}
+plot(log_invert_mem)
+qqnorm(resid(log_invert_mem))
+qqline(resid(log_invert_mem))
+```
+
+This model is a much better fit for the residuals but now very non-normal. However, I will prioritise meeting the assumption of homogeneity of variance as linear mixed-effects models are normally more robust to violations of the assumption of normality. I will therefore log my residuals.
+
+# Data analysis
+
+```{r}
+anova(log_invert_mem, type = "I")
+```
+
+There are no significnat effects of any of the treatments on invertebrate abundance. 
+
+```{r}
+summary(log_invert_mem)
+```
+
+# Obtaining summary statistics
+
+I will use the marginal effects package to predict means and standard errors.
+
+Loading the marginal effects package:
+
+```{r}
+library(marginaleffects)
+```
+
+Predicting summary statistics from the model grouped by treatment and species:
+
+```{r}
+log_predictions_invert_data <- predictions(log_invert_mem, by = c("microbiome_present", "basalt_present", "tree_sp"))
+log_predictions_invert_data
+```
+
+I will now save the predictions dataframe:
+
+```{r}
+write_csv(log_predictions_invert_data, "log_predictions_invert_data.csv")
+```
+
+I will read the data back in to view the dataframe as formatting may have changed by saving as a csv file.
+
+```{r}
+log_predictions_invert_data <- read_csv("log_predictions_invert_data.csv")
+log_predictions_invert_data
+```
+
+These predictions are logged so need to I need to back transform (exponentiate and -0.1) the estimates and confidence intervals to get actual estimates: 
+
+```{r}
+predictions_invert_data <- log_predictions_invert_data %>% 
+  mutate(estimate = exp(estimate),
+         conf.low = exp(conf.low),
+         conf.high = exp(conf.high))
+                  
+predictions_invert_data
+```
+
+Saving the dataframe:
+
+```{r}
+#write_csv(predictions_invert_data, "predictions_invert_data.csv")
+```
+
+# Data visualisation
+
+I will now load in the predictions dataframe to create graphs using ggplot.
+
+```{r}
+predictions_invert_data <- read_csv("predictions_invert_data.csv")
+predictions_invert_data
+```
+
+Adding in a variable for treatment to make plotting easier:
+
+```{r}
+predictions_invert_data <- predictions_invert_data %>% 
+  mutate(treatment = case_when(
+    basalt_present == "y" & microbiome_present == "y" ~ "basalt+microbiome",
+    basalt_present == "y" & microbiome_present == "n" ~ "basalt",
+    basalt_present == "n" & microbiome_present == "y" ~ "microbiome",
+    basalt_present == "n" & microbiome_present == "n" ~ "control",
+    TRUE ~ NA_character_
+  ))
+
+predictions_invert_data
+```
+
+Need to reorder the factor levels within the dataset:
+
+```{r}
+predictions_invert_data$treatment <- factor(predictions_invert_data$treatment,
+                                                levels = c("control", "basalt", "microbiome", "basalt+microbiome"))
+```
+
+Plotting predicted means and confidence intervals for decomposition rate under different treatments and for different species:
+
+```{r}
+predictions_invert_fig1 <- ggplot(predictions_invert_data, 
+                                   aes(x = treatment, 
+                                       y = estimate, 
+                                       colour = treatment, group = treatment)) + 
+    geom_errorbar(aes(ymin = conf.low, ymax = conf.high), 
+                  colour="black", width = 0.2, position = position_dodge(0.1)) +
+    geom_point(position = position_dodge(0.1), size = 3) +
+  scale_color_manual(values=c( "forestgreen", "darkorange", "dodgerblue", "deeppink"), 
+                     labels=c("Control", "Basalt", "Microbiome", "Basalt+Microbiome")) +
+  scale_x_discrete(labels = c( "C", "B", "M", "B+M")) +
+  labs(x = "Treatment", y = "Invertebrate Abundance", title = "Effect of Basalt Addition and Microbiome\nInoculation on Invertebrate Abundance") +
+  theme_bw() +
+  theme(axis.text.x = element_text(size = 10),  
+        axis.title.x = element_text(size = 14), 
+        strip.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 10),  
+        axis.title.y = element_text(size = 14),  
+        plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+        legend.title=element_blank()) +
+  facet_wrap(~tree_sp, scales = "free_y", 
+             labeller = labeller(species = c("alder" = "Alder", 
+                                             "birch" = "Birch", 
+                                             "oak" = "Oak")))
+
+predictions_invert_fig1
+```
+
+*Figure 1: Graph showing the effect of basalt addition and microbiome inoculation on the predicted invertebrate abundnace for different species of tree and their confidence intervals, based on mixed-effects model 1*
+
+The confidence intervals on this graph are very large, indicating that there are no significant effects of the treatments on invertebrate abundance.
+
+# Obtaining estimates for treatments overall (not by species)
+
+```{r}
+log_predictions_invert_data_overall <- predictions(log_invert_mem, by = c("microbiome_present", "basalt_present"))
+log_predictions_invert_data_overall
+```
+
+I will now save this dataframe:
+
+```{r}
+#write_csv(log_predictions_invert_data_overall, "log_predictions_invert_data_overall.csv")
+```
+
+Reading in the dataframe:
+
+```{r}
+log_predictions_invert_data_overall <- read_csv("log_predictions_invert_data_overall.csv")
+log_predictions_invert_data_overall
+```
+
+These predictions are logged so need to exponentiate and -0.1 the estimates and confidence intervalues to get actual values:
+
+```{r}
+predictions_invert_data_overall <- log_predictions_invert_data_overall %>% 
+  mutate(estimate = exp(estimate), 
+         conf.low = exp(conf.low),
+         conf.high = exp(conf.high))
+                  
+predictions_invert_data_overall
+```
+
+Saving the dataframe:
+
+```{r}
+#write_csv(predictions_invert_data_overall, "predictions_invert_data_overall.csv")
+```
+
+I will now load in the predictions dataframe to create graphs using ggplot.
+
+```{r}
+predictions_invert_data_overall <- read_csv("predictions_invert_data_overall.csv")
+```
+
+Adding in a variable for treatment to make plotting easier:
+
+```{r}
+predictions_invert_data_overall <- predictions_invert_data_overall %>% 
+  mutate(treatment = case_when(
+    basalt_present == "y" & microbiome_present == "y" ~ "basalt+microbiome",
+    basalt_present == "y" & microbiome_present == "n" ~ "basalt",
+    basalt_present == "n" & microbiome_present == "y" ~ "microbiome",
+    basalt_present == "n" & microbiome_present == "n" ~ "control",
+    TRUE ~ NA_character_
+  ))
+
+predictions_invert_data_overall
+```
+
+Need to reorder the factor levels within the dataset:
+
+```{r}
+predictions_invert_data_overall$treatment <- factor(predictions_invert_data_overall$treatment,
+                                                levels = c("control", "basalt", "microbiome", "basalt+microbiome"))
+```
+
+Plotting predicted means and confidence intervals for decomposition rate under different treatments and for different species:
+
+```{r}
+predictions_invert_fig2 <- ggplot(predictions_invert_data_overall, 
+                                   aes(x = treatment, 
+                                       y = estimate, 
+                                       colour = treatment, group = treatment)) + 
+    geom_errorbar(aes(ymin = conf.low, ymax = conf.high), 
+                  colour="black", width=.3, linewidth= 0.5, position = position_dodge(0.1)) +
+    geom_point(position = position_dodge(0.1), size=4) +
+  scale_color_manual(values=c( "forestgreen", "darkorange", "dodgerblue", "deeppink"), 
+                     labels=c("Control", "Basalt", "Microbiome", "Basalt+Microbiome")) +
+  scale_x_discrete(labels = c( "C", "B", "M", "B+M")) +
+  labs(x = "Treatment", y = "Invertebrate Abundance", title = "Invertebrate Abundance") +
+  theme_bw() +
+  theme(axis.text.x = element_text(size = 10),  
+        axis.title.x = element_text(size = 14), 
+        strip.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 10),  
+        axis.title.y = element_text(size = 14),  
+        plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+        aspect.ratio = 0.9,
+        legend.title=element_blank()) 
+
+predictions_invert_fig2
+```
+
+*Figure 2: Graph showing the effect of basalt addition and microbiome inoculation on the overall predicted invertebrate abundance, and their confidence intervals, based on mixed-effects model 1*
+
+From the above graph we can see that overall, invertebrate abundance is not significantly affected by treatment.
+
+# Saving the plots
+
+```{r}
+#ggsave("predictions_invert_fig1.png", plot = predictions_invert_fig1, width = 9, height = 4)
+```
+
+```{r}
+#ggsave("predictions_invert_fig2.png", plot = predictions_invert_fig2, width = 8, height = 6)
+```
+
+# Obtaining microbiome only summary statistics
+
+```{r}
+log_predictions_invert_data_microbiome_overall <- predictions(log_invert_mem, by = c("microbiome_present"))
+log_predictions_invert_data_microbiome_overall
+```
+
+Back-transforming estimates and confidence intervals:
+
+```{r}
+predictions_invert_data_microbiome_overall <- log_predictions_invert_data_microbiome_overall %>% 
+  mutate(estimate = exp(estimate), 
+         conf.low = exp(conf.low),
+         conf.high = exp(conf.high))
+                  
+predictions_invert_data_microbiome_overall
+```
+
+Species-by-species predictions
+
+```{r}
+log_predictions_invert_data_microbiome <- predictions(log_invert_mem, by = c("microbiome_present", "tree_sp"))
+```
+
+Back-transforming estimates and confidence intervals:
+
+```{r}
+predictions_invert_data_microbiome <- log_predictions_invert_data_microbiome %>% 
+  mutate(estimate = exp(estimate), 
+         conf.low = exp(conf.low),
+         conf.high = exp(conf.high))
+                  
+predictions_invert_data_microbiome
+```
+
+# Obtaining basalt only summary statistics
+
+```{r}
+log_predictions_invert_data_basalt_overall <- predictions(log_invert_mem, by = c("basalt_present"))
+log_predictions_invert_data_basalt_overall
+```
+
+```{r}
+predictions_invert_data_basalt_overall <- log_predictions_invert_data_basalt_overall %>% 
+  mutate(estimate = exp(estimate), 
+         conf.low = exp(conf.low),
+         conf.high = exp(conf.high))
+                  
+predictions_invert_data_basalt_overall
+```
+
+Species-by-species predictions
+
+```{r}
+log_predictions_invert_data_basalt <- predictions(log_invert_mem, by = c("basalt_present", "tree_sp"))
+log_predictions_invert_data_basalt %>% 
+  arrange(tree_sp)
+```
+
+Back-transforming estimates and confidence intervals:
+
+```{r}
+predictions_invert_data_basalt <- log_predictions_invert_data_basalt %>% 
+  mutate(estimate = exp(estimate), 
+         conf.low = exp(conf.low),
+         conf.high = exp(conf.high))
+                  
+predictions_invert_data_basalt
+```
+
+
+
+
+
+
+

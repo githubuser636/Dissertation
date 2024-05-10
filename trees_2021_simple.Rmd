@@ -1,0 +1,538 @@
+---
+title: "trees_2021_simple"
+output: html_document
+date: "2024-03-28"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Want to check how the first height measurement of trees in 2021 varies between treatments. So far have found that growth rate is reduced under microbiome treatment from 2021 to 2023 but if I find that trees in microbiome treatment started off with greater height in summer 2023 then this may indicate that the microbiome treatment has boosted growth in some way. 
+
+# Loading packages and data
+
+Loading packages:
+
+```{r}
+library(janitor)
+library(AICcmodavg)
+library(arm)
+library(cowplot)
+library(DAAG)
+library(faraway)
+library(ggfortify)
+library(ggplot2)
+library(lme4)
+library(MASS)
+library(nlme)
+library(quarto)
+library(SemiPar)
+library(Sleuth3)
+library(SMPracticals)
+library(tidyverse)
+library(dplyr)
+library(lmerTest)
+```
+
+Reading in data:
+
+```{r}
+tree_data_raw <- read_csv("/Users/dorasolloway/Documents/Wadham/Year_4/Masters_project/tree_growth_stats/tree_data_21to23_raw.csv")
+```
+
+# Data wrangling
+
+Cleaning the data:
+
+```{r}
+tree_data_clean <- tree_data_raw %>% 
+  clean_names() %>% # Cleaning names to put them into a better format
+  rename(height_cm_2021 = height_cm, 
+         diameter_base_mm_2021 = diameter_mm,
+         cell_plot = cell_no,
+         group_block = group_from_link_record, 
+         growth_per_week_cm = height_week_of_growth_cm,
+         age_at_planting = age_from_plant_height_reference_2,
+         diameter_base_mm_12_21 = diameter_mm_12_21,
+         diameter_base_mm_2022 = base_diameter_mm_10_22,
+         dbh_mm_2022 = diameter_at_1_3m_mm_10_22,
+         height_cm_2022 = height_to_tip_cm_10_22,
+         height_cm_2023 = height_to_tip_cm_10_23,
+         dbh_mm_2023 = diameter_at_1_3m_mm_10_23,
+         diameter_base_mm_2023 = base_diameter_mm_10_23) %>% # Renaming variables so they are easier to understand
+  mutate(treatment = case_when( 
+    basalt == "Yes" & soil_innoculation == "Yes" ~ "basalt+microbiome",
+    basalt == "Yes" & soil_innoculation == "No" ~ "basalt",
+    basalt == "No" & soil_innoculation == "Yes" ~ "microbiome",
+    basalt == "No" & soil_innoculation == "No" ~ "control",
+    TRUE ~ NA_character_)) %>% # Adding a variable for treatment
+  select(barcode, height_cm_2021, tree_type, health, diameter_base_mm_2021, 
+         cell_plot, basalt, soil_innoculation, group_block, treatment, 
+         height_cm_2022, dbh_mm_2022, diameter_base_mm_2022, height_cm_2023, 
+         dbh_mm_2023, diameter_base_mm_2023, dead_10_22, health_10_23) %>% # Selecting only the variables needed i.e., related to height, health and grouping factors
+  filter(tree_type != "Goat willow", # Filtering out goal willow as very few individuals of this species
+         health == "Healthy" | health == "Vigorous", # Filtering to healthy individuals in 2021 only as dead individuals have been replanted and unhealthy individuals may have dieback, affecting their height
+         is.na(dead_10_22) | dead_10_22 != "checked", # Filtering to individuals who were not found dead in October 2022, as these individuals will have been replanted
+         health_10_23 == "Alive")  # Filtering to individuals who were found alive in October 2023
+
+tree_data_clean
+```
+
+Converting the dataset to long/tidy format:
+
+```{r}
+temp_height <- tree_data_clean %>% 
+  pivot_longer(
+    cols = c(height_cm_2021, height_cm_2022, height_cm_2023), 
+    names_to = "year_measured",
+    values_to =  "height_cm") %>% 
+  mutate(year_measured = str_sub(year_measured, start = -4))
+
+temp_diam <- tree_data_clean %>%
+  pivot_longer(
+    cols = c(diameter_base_mm_2021, diameter_base_mm_2022, diameter_base_mm_2023), 
+    names_to = "year_measured",
+    values_to = "diameter_base_mm") %>% 
+  mutate(year_measured = str_sub(year_measured, start = -4)) %>%
+  select(barcode, year_measured, diameter_base_mm)
+
+temp_dbh <- tree_data_clean %>%
+  pivot_longer(
+    cols = c(dbh_mm_2022, dbh_mm_2023), 
+    names_to = "year_measured",
+    values_to = "dbh_mm") %>% 
+  mutate(year_measured = str_sub(year_measured, start = -4)) %>%
+  select(barcode, year_measured, dbh_mm)
+
+tree_data_long <- temp_height %>% 
+  left_join(temp_diam, by = c("barcode", "year_measured")) %>% 
+  left_join(temp_dbh, by = c("barcode", "year_measured"))
+
+tree_data_long
+```
+
+Rearranging the dataset into a more logical order and simplifying it:
+
+```{r}
+tree_data_simple <- tree_data_long %>% 
+  select(barcode, tree_type, cell_plot, basalt, soil_innoculation, 
+         group_block, treatment, year_measured, height_cm, diameter_base_mm,
+         dbh_mm) %>% # Selecting only the variables I need for analysis
+  relocate(barcode, group_block, cell_plot, tree_type, treatment, basalt, 
+          soil_innoculation, year_measured, height_cm, diameter_base_mm,
+          dbh_mm) # Changing the dataset into a more logical order
+
+tree_data_simple
+```
+
+Filtering the dataset to 2021 only:
+
+```{r}
+tree_data_2021 <- tree_data_simple %>% 
+  filter(year_measured == "2021")
+
+tree_data_2021
+```
+
+
+# Converting variables to factors
+
+```{r}
+tree_data_2021$barcode <- factor(tree_data_2021$barcode)
+tree_data_2021$tree_type <- factor(tree_data_2021$tree_type)
+tree_data_2021$cell_plot <- factor(tree_data_2021$cell_plot)
+tree_data_2021$basalt <- factor(tree_data_2021$basalt) 
+tree_data_2021$soil_innoculation <- factor(tree_data_2021$soil_innoculation)
+tree_data_2021$group_block <- factor(tree_data_2021$group_block)
+tree_data_2021$year_measured <- factor(tree_data_2021$year_measured)
+tree_data_2021$treatment <- factor(tree_data_2021$treatment)
+```
+
+# Model making, assumption checking and transformations
+
+I will make a linear mixed-effects model to determine the effect of basalt and microbiome treatments on height across 3 years and 6 tree species. I am using height as my response variable as all 3 growth variables are highly correlated and so it would not be appropriate to do formal analyses on all 3. Height is the best growth variable to use as dbh was not measured in the first year, and base diameter was more variable between species than height in 2021. 
+
+```{r}
+tree_height_mem <- lmer(height_cm ~ basalt * soil_innoculation * tree_type + 
+                          (1|group_block) + (1|cell_plot), data = tree_data_2021)
+```
+
+Checking the assumptions of the model: 
+
+```{r}
+plot(tree_height_mem)
+qqnorm(resid(tree_height_mem))
+qqline(resid(tree_height_mem))
+```
+
+Assumptions of homogeneity of variance and normality well met so will not transform the data.
+
+```{r}
+anova(tree_height_mem, type = "I")
+```
+
+There are significant main effects of tree type, and significant interaction effects of microbiome * tree type, as well as an almost significant interaction effect of basalt * soil * tree type.
+
+```{r}
+summary(tree_height_mem)
+```
+
+Basalt and microbiome main effects are both positive. 
+
+# Species-by-species modelling 
+
+Will filter the dataset by species and re-run the models. This will help simplify the models by removing species as a fixed effect and therefore make the summary output easier to interpret. 
+
+#Oak
+
+```{r}
+oak_tree_data <- tree_data_2021 %>% 
+  filter(tree_type == "Oak")
+```
+
+```{r}
+oak_height_mem <- lmer(height_cm ~ basalt * soil_innoculation + 
+                          (1|group_block) + (1|cell_plot), data = oak_tree_data)
+```
+
+```{r}
+anova(oak_height_mem, type = "I")
+```
+
+There is are no significant effects of treatments on oak trees in 2021.
+
+```{r}
+summary(oak_height_mem)
+```
+
+Basalt main effect is negative but microbiome main effect is positive.
+
+# Alder
+
+```{r}
+alder_tree_data <- tree_data_2021 %>% 
+  filter(tree_type == "Alder")
+```
+
+```{r}
+alder_height_mem <- lmer(height_cm ~ basalt * soil_innoculation + 
+                          (1|group_block) + (1|cell_plot) , data = alder_tree_data)
+```
+
+```{r}
+anova(alder_height_mem, type = "I")
+```
+
+There are no significant effects of treatments on tree height for alder in 2021.
+
+```{r}
+summary(alder_height_mem)
+```
+
+Basalt and microbiome main effects are positive.
+
+# Aspen
+
+```{r}
+aspen_tree_data <- tree_data_2021 %>% 
+  filter(tree_type == "Aspen")
+```
+
+```{r}
+aspen_height_mem <- lmer(height_cm ~ basalt * soil_innoculation + 
+                          (1|group_block) + (1|cell_plot), data = aspen_tree_data)
+```
+
+```{r}
+anova(aspen_height_mem, type = "I")
+```
+
+There are no significant effects of treatment on height for aspen in 2021.
+
+```{r}
+summary(aspen_height_mem)
+```
+
+Basalt effect is negative while microbiome effect is positive.
+
+# Birch
+
+```{r}
+birch_tree_data <- tree_data_2021 %>% 
+  filter(tree_type == "Birch")
+```
+
+```{r}
+birch_height_mem <- lmer(height_cm ~ basalt * soil_innoculation + 
+                          (1|group_block) + (1|cell_plot), data = birch_tree_data)
+```
+
+```{r}
+anova(birch_height_mem, type = "I")
+```
+
+There is an almost significant main effect of microbiome on birch height in 2021.
+
+```{r}
+summary(birch_height_mem)
+```
+
+Effect of basalt and microbiome on birch height is positive.
+
+# Cherry
+
+```{r}
+cherry_tree_data <- tree_data_2021 %>% 
+  filter(tree_type == "Cherry")
+```
+
+```{r}
+cherry_height_mem <- lmer(height_cm ~ basalt * soil_innoculation  + 
+                          (1|group_block) + (1|cell_plot) , data = cherry_tree_data)
+```
+
+```{r}
+anova(cherry_height_mem, type = "I")
+```
+
+There are no significant effects of treatments on cherry height in 2021.
+
+```{r}
+summary(cherry_height_mem)
+```
+
+Basalt and microbiome main effects are negative.
+
+# Rowan
+
+```{r}
+rowan_tree_data <- tree_data_2021 %>% 
+  filter(tree_type == "Rowan")
+```
+
+```{r}
+rowan_height_mem <- lmer(height_cm ~ basalt * soil_innoculation + 
+                          (1|group_block) + (1|cell_plot) , data = rowan_tree_data)
+```
+
+```{r}
+anova(rowan_height_mem, type = "I")
+```
+
+There are no significant main effects of treatments on rowan in 2021.
+
+```{r}
+summary(rowan_height_mem)
+```
+
+Negative effects of basalt and microbiome on rowan height in 2021.
+
+# Summary of results
+
+There appears to be a generally positive main effect of microbiome inoculation on tree height in 2021, and this is significant overall and almost significant for birch. There are no significant main effects of basalt addition on tree height in 2021 and direction of effects is mixed.
+
+# Extracting means and confidence intervals from the model
+
+I will use the marginal effects package to obtain summary statistics:
+
+```{r}
+library(marginaleffects)
+```
+
+I will first get summary statistics species by species:
+
+```{r}
+predictions_tree_data_2021 <- predictions(tree_height_mem, 
+                                          by = c("soil_innoculation", "basalt", "tree_type"))
+predictions_tree_data_2021
+```
+
+I will also get overall summary statistics:
+
+```{r}
+predictions_tree_data_2021_overall <- predictions(tree_height_mem, 
+                                          by = c("soil_innoculation", "basalt"))
+predictions_tree_data_2021_overall
+```
+
+Predictions for effect of microbiome innoculation only:
+
+```{r}
+predictions_tree_data_2021_microbiome <- predictions(tree_height_mem, 
+                                          by = c("soil_innoculation", "tree_type"))
+predictions_tree_data_2021_microbiome
+```
+
+```{r}
+predictions_tree_data_2021_microbiome_overall <- predictions(tree_height_mem, 
+                                          by = c("soil_innoculation"))
+predictions_tree_data_2021_microbiome_overall
+```
+
+```{r}
+predictions_tree_data_2021_basalt <- predictions(tree_height_mem, 
+                                          by = c("basalt", "tree_type"))
+predictions_tree_data_2021_basalt
+```
+```{r}
+predictions_tree_data_2021_basalt_overall <- predictions(tree_height_mem, 
+                                          by = c("basalt"))
+predictions_tree_data_2021_basalt_overall
+```
+
+# Data visualisation
+
+Saving species-by-species predictions:
+
+```{r}
+#write_csv(predictions_tree_data_2021, "predictions_tree_data_2021.csv")
+```
+
+Reading in the data:
+
+```{r}
+predictions_tree_data_2021 <- read_csv("predictions_tree_data_2021.csv")
+```
+
+Adding in a variable for treatment to make plotting easier:
+
+```{r}
+predictions_tree_data_2021 <- predictions_tree_data_2021 %>% 
+  mutate(treatment = case_when(
+    basalt == "Yes" & soil_innoculation == "Yes" ~ "basalt+microbiome",
+    basalt == "Yes" & soil_innoculation == "No" ~ "basalt",
+    basalt == "No" & soil_innoculation == "Yes" ~ "microbiome",
+    basalt == "No" & soil_innoculation == "No" ~ "control",
+    TRUE ~ NA_character_
+  ))
+
+predictions_tree_data_2021
+```
+
+Need to reorder the factor levels within the dataset:
+
+```{r}
+predictions_tree_data_2021$treatment <- factor(predictions_tree_data_2021$treatment,
+                                                levels = c("control", "basalt", "microbiome", "basalt+microbiome"))
+```
+
+Converting other variables to factors:
+
+```{r}
+predictions_tree_data_2021$soil_innoculation <- factor(predictions_tree_data_2021$soil_innoculation)
+predictions_tree_data_2021$basalt <- factor(predictions_tree_data_2021$basalt)
+predictions_tree_data_2021$tree_type <- factor(predictions_tree_data_2021$tree_type)
+```
+
+Plotting predicted means and confidence intervals for tree height under different treatments and for different species:
+
+```{r}
+tree_height_2021_predictions_fig1 <- ggplot(predictions_tree_data_2021, 
+                                   aes(x = treatment, 
+                                       y = estimate, 
+                                       colour = treatment, group = treatment)) + 
+    geom_errorbar(aes(ymin = conf.low, ymax = conf.high), 
+                  colour="black", width=.3, position = position_dodge(0.1)) +
+    geom_point(position = position_dodge(0.1), size=3) +
+  scale_color_manual(values=c( "forestgreen", "darkorange", "dodgerblue", "deeppink"), 
+                     labels=c("Control", "Basalt", "Microbiome", "Basalt+Microbiome")) +
+  scale_x_discrete(labels = c( "C", "B", "M", "B+M")) +
+  labs(x = "Treatment", y = "Tree Height (cm)", title = "Effect of Basalt Addition and Microbiome\nInoculation on Tree Height in 2021") +
+  theme_bw() +
+  theme(axis.text.x = element_text(size = 10),  
+        axis.title.x = element_text(size = 14), 
+        strip.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 10),  
+        axis.title.y = element_text(size = 14),  
+        plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+        legend.title=element_blank()) +
+  facet_wrap(~tree_type, scales = "free_y")
+
+tree_height_2021_predictions_fig1
+```
+
+*Figure 1: Graph showing the effect of basalt addition and microbiome inoculation on tree height in 2021for different species of tree and their confidence intervals, based on mixed-effects model 1*
+
+Saving overall dataframe:
+
+```{r}
+#write_csv(predictions_tree_data_2021_overall, "predictions_tree_data_2021_overall.csv")
+```
+
+Reading in the dataframe (in case of formatting issues):
+
+```{r}
+predictions_tree_data_2021_overall <- read_csv("predictions_tree_data_2021_overall.csv")
+```
+
+Adding in a variable for treatment to make plotting easier:
+
+```{r}
+predictions_tree_data_2021_overall <- predictions_tree_data_2021_overall %>% 
+  mutate(treatment = case_when(
+    basalt == "Yes" & soil_innoculation == "Yes" ~ "basalt+microbiome",
+    basalt == "Yes" & soil_innoculation == "No" ~ "basalt",
+    basalt == "No" & soil_innoculation == "Yes" ~ "microbiome",
+    basalt == "No" & soil_innoculation == "No" ~ "control",
+    TRUE ~ NA_character_
+  ))
+
+predictions_tree_data_2021_overall
+```
+
+Need to reorder the factor levels within the dataset:
+
+```{r}
+predictions_tree_data_2021_overall$treatment <- factor(predictions_tree_data_2021_overall$treatment,
+                                                levels = c("control", "basalt", "microbiome", "basalt+microbiome"))
+```
+
+Converting other variables to factors:
+
+```{r}
+predictions_tree_data_2021_overall$soil_innoculation <- factor(predictions_tree_data_2021_overall$soil_innoculation)
+predictions_tree_data_2021_overall$basalt <- factor(predictions_tree_data_2021_overall$basalt)
+```
+
+Plotting predicted means and confidence intervals for herbivory score under different treatments and for different species:
+
+```{r}
+predictions_tree_data_2021_overall_fig1 <- ggplot(predictions_tree_data_2021_overall, 
+                                   aes(x = treatment, 
+                                       y = estimate, 
+                                       colour = treatment, group = treatment)) + 
+    geom_errorbar(aes(ymin = conf.low, ymax = conf.high), 
+                  colour="black", width=.1, size = 0.5, position = position_dodge(0.1)) +
+    geom_point(position = position_dodge(0.1), size=3) +
+  scale_color_manual(values=c( "forestgreen", "darkorange", "dodgerblue", "deeppink"), 
+                     labels=c("Control", "Basalt", "Microbiome", "Basalt+Microbiome")) +
+  scale_x_discrete(labels = c( "C", "B", "M", "B+M")) +
+  labs(x = "Treatment", y = "Tree Height", title = "Effect of Basalt Addition and Soil Microbiome\nInoculation on Tree Height in 2021") +
+  theme_bw() +
+  theme(axis.text.x = element_text(size = 10),  
+        axis.title.x = element_text(size = 14), 
+        strip.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 10),  
+        axis.title.y = element_text(size = 14),  
+        plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+        aspect.ratio = 0.9,
+        legend.title=element_blank()) 
+
+predictions_tree_data_2021_overall_fig1
+```
+
+*Figure 2: Graph showing the effect of basalt addition and microbiome inoculation on tree height in 2021 and their confidence intervals, based on mixed-effects model 1*
+
+# Saving the plots
+
+```{r}
+#ggsave("tree_height_2021_species_fig.png", plot = tree_height_2021_predictions_fig1, width = 9, height = 6)
+```
+
+```{r}
+#ggsave("tree_height_2021_overall_fig.png", plot = predictions_tree_data_2021_overall_fig1, width = 8, height = 6)
+```
+
+
+

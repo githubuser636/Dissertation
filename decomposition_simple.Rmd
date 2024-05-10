@@ -1,0 +1,739 @@
+---
+title: "decomposition_simple"
+output: html_document
+date: "2024-03-26"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+I have made a simplified script below to show my decomposition data wrangling and analysis.
+
+# Background 
+
+Green and rooibos teabags were buried in pairs at 189 trees (~1 per species per plot per block) for ~3 months and were weighed before and after. Decomposition rate has been calculated following the Teabag Index (Keuskamp et al., 2013).
+
+# Loading packages and data
+
+```{r}
+library(AICcmodavg)
+library(arm)
+library(cowplot)
+library(DAAG)
+library(faraway)
+library(ggfortify)
+library(ggplot2)
+library(lme4)
+library(MASS)
+library(nlme)
+library(quarto)
+library(SemiPar)
+library(Sleuth3)
+library(SMPracticals)
+library(tidyverse)
+library(dplyr)
+library(lmerTest)
+```
+
+Reading in the data:
+
+```{r}
+teabag_data_raw <- read_csv("/Users/dorasolloway/Documents/Wadham/Year_4/Masters_project/teabag_stats/teabag_data_raw.csv")
+```
+
+# Data wrangling
+
+Renaming variables and selecting the variables I need:
+
+```{r}
+teabag_data_clean <- teabag_data_raw %>% 
+  rename(rooibos_id = rooibus_id,
+         rooibos_weight_before = rooibus_weight_before,
+         rooibos_damage_percentage = rooibow_damage_percentage) %>% 
+  select(date_in:rooibos_damage_percentage) 
+
+head(teabag_data_clean)
+```
+
+# Calculating weight change
+
+Currently, weight before refers to the whole teabag including string and tag, whereas weight after is without the string and tag. Therefore need to rename green_weight_after and rooibos_weight_after to show that this is the weight without the tag, and then mutate the dataset to include a new column where the average weight of a teabag string and tag is added to these weights:
+
+```{r}
+string_data_raw <- read_csv("/Users/dorasolloway/Documents/Wadham/Year_4/Masters_project/teabag_stats/string_data_raw.csv")
+```
+
+Finding the mean weight teabag string and tag:
+
+```{r}
+mean_string_weight <- mean(string_data_raw$weight)
+mean_string_weight
+```
+
+Finding the standard deviation of mean weight teabag string and tag:
+
+```{r}
+sd_string_weight <- sd(string_data_raw$weight)
+```
+
+Finding standard error of the mean of string weight:
+
+```{r}
+sem_string_weight <- sd_string_weight/sqrt(20)
+sem_string_weight
+```
+
+Therefore will round mean string weight to 0.086.
+
+```{r}
+mean_string_weight_rounded <- 0.086
+```
+
+Adding mean teabag string and tag weight to weight_after in my teabag dataset, then calculating difference in weight:
+
+```{r}
+teabag_data <- teabag_data_clean %>% 
+  mutate(green_weight_after_string = green_weight_after + mean_string_weight_rounded, 
+         rooibos_weight_after_string = rooibos_weight_after + mean_string_weight_rounded) %>% 
+  mutate(green_weight_difference_g = green_weight_before - green_weight_after_string ,
+         rooibos_weight_difference_g = rooibos_weight_before - rooibos_weight_after_string) 
+
+teabag_data
+```
+
+# Teabag bag weight
+
+In order to calculate decomposition rate, need to know the before and after weight of rooibos and green bags without the actual teabag weight.
+
+Reading in the data:
+
+```{r}
+bag_weight_data <- read_csv("/Users/dorasolloway/Documents/Wadham/Year_4/Masters_project/teabag_stats/bag_weight_data.csv")
+```
+
+Calculating mean of all the bags:
+
+```{r}
+mean_bag_weight <- mean(bag_weight_data$bag_weight)
+mean_bag_weight
+```
+
+The mean bag weight out of the 20 bags weighed (10 green, 10 rooibos) is 0.1532.
+
+Calculating sd:
+
+```{r}
+sd_bag_weight <- sd(bag_weight_data$bag_weight)
+sd_bag_weight
+```
+
+Calculating standard error of the mean:
+
+```{r}
+sem_bag_weight <- sd_bag_weight/sqrt(20)
+sem_bag_weight
+```
+
+Therefore can round the mean bag weight to 0.153.
+
+```{r}
+mean_bag_weight_rounded <-  0.153
+```
+
+Will mutate the dataset to have variables for green/rooibos weight before and after minus the weight of the teabag and call this dataset tea_data:
+
+```{r}
+tea_data <- teabag_data %>% 
+  mutate(green_tea_before = green_weight_before - mean_bag_weight_rounded - mean_string_weight_rounded) %>% 
+  mutate(green_tea_after = green_weight_after - mean_bag_weight_rounded) %>% 
+  mutate(rooibos_tea_before = rooibos_weight_before - mean_bag_weight_rounded - mean_string_weight_rounded) %>% 
+  mutate(rooibos_tea_after = rooibos_weight_after - mean_bag_weight_rounded) 
+
+tea_data
+```
+
+# Variable explanations
+
+To avoid confusion of the different variable names, will give a quick explanation of each below:
+
+- green_weight_before / rooibos_weight_before: weight of green/rooibos tea + bag + string + label before being buried (grams)
+- green_weight_after / rooibos_weight_after: weight of green/rooibos tea + bag (no string or label) after being buried for 3 months (grams)
+- green_damage_percentage / rooibos_damage_percentage: how damaged the teabag was after retrieval i.e., 1 would indicate a tiny amount of damage to the bag whereas 20 would indicate a significant amount of damage to the bag (and therefore the weight is likely to be less accurate) (grams)
+- green_weight_after_string / rooibos_weight_after_string: green_weight_after/rooibos_weight_after + weight of average string & cord i.e., weight of tea + bag + string + label after being buried for 3 months (grams)
+- green_weight_difference_g / rooibos_weight_difference_g: green_weight_before/rooibos_weight_before - green_weight_after_string/rooibos_weight_after_string (grams)
+- green_tea_before / rooibos_tea_before = weight of green/rooibos tea only (no bag, string or cord) before being buried (grams)
+- green_tea_after / rooibos_tea_after = weight of green/rooibos tea only (no bag, string or cord) after being buried for 3 months (grams)
+
+# Calculating decomposition rate
+
+To run statistical tests, need to calculate a soil decomposition rate. According to Keuskamp et al. 2013, the differences in decomposition rate between green and rooibos teabags can be used to act as different time points to calculate a decomposition curve, as explained in the following (paraphrased from their paper): 
+
+Calculating a decomposition curve using approximation from Keuskamp et al. 2013:
+
+$W(t) = \alpha e^{-kt} + (1-\alpha)$ 
+
+Where k is the decomposition rate (decreases with time due to increasing proportion of recalcitrant material), W(t) is the weight of the substrate after incubation time t, \alpha is the labile and 1-\alpha is the recalcitrant fraction of litter. Assume during short field incubations that the weight loss of the recalcitrant fraction is negligible. Decomposition rate constant k can only be estimated from early stages of decomposition while decomposable fraction alpha is only estimable once most of the labile material is gone, requiring a time series, so instead can use two different types of tea. Decomposition rate of rooibos is low compared to green tea and so decomposition of labile material still continues in rooibos after all labile material in green tea has already been consumed. Therefore the difference between these litter types means you can estimate decomposable fraction from green tea ($\alpha_g$) and decomposition rate constant k from rooibos tea at a single point in time. (Paraphrased from Keuskamp et al., 2013).
+
+To calculate k (decomposition rate), first need to calculate S - the stabilisation factor (proportion of tea that doesn't decompose - tells you about the environmental conditions of the litter):
+
+- $S = 1 - (\alpha_g/H_g)$, where Hg is the hydrolysable fraction of green tea (retrieved from Keuskamp et al., 2013, = 0.842)
+
+Calculating green ag: $\alpha_g$ (the decomposable fraction of green tea) = mass lost / starting weight. 
+
+Then need to calculate expected decomposable fraction of rooibos tea, Ar, based on known hydrolysable fraction, Hr (retrieved from Keuskamp et al., 2013, = 0.552): $\alpha_r = H_r(1 - S)$
+
+I will be using the same hydrolysable fractions used in the Keuskamp et al., 2013 paper as even though I have used a different brand of tea, I will assume these fractions to be roughly the same. 
+
+Rearranging the first equation: $k = \frac{1}{t}\ln{\frac{\alpha_r}{W(t)-(1-\alpha_r)}}$
+
+To calculate k, first need to calculate W(t):
+
+- W(t) = rooibos_tea_after/rooibos_tea_before (weight change of rooibos tea)
+
+Need to add a column to the dataset called days_buried - this is t for the above equation:
+
+```{r}
+# Calculate the difference in days between 'date_out' and 'date_in'
+tea_data$days_buried <- as.Date(tea_data$date_out, format="%d/%m/%Y") - 
+                        as.Date(tea_data$date_in, format="%d/%m/%Y")
+
+# Convert the time difference to numeric
+tea_data$days_buried <- as.numeric(as.character(tea_data$days_buried))
+
+# Show the resulting dataframe
+print(tea_data)
+```
+
+To calculate k, should only use observations where there is no negative weight change, as this indicates errors in weighing. Will also remove rows with missing values.
+
+Weight after has been double checked where the weight difference has been negative and so this probably indicates and error in initial weighing, or a mislabeling of teabags. Either way, these teabags need to be filtered out.
+
+Can now calculate k using the above method:
+
+```{r}
+decomposition_data <- tea_data %>% 
+  filter(green_weight_difference_g > 0, rooibos_weight_difference_g > 0, 
+         !is.na(green_weight_before), !is.na(green_weight_after), 
+         !is.na(rooibos_weight_before), !is.na(rooibos_weight_after)) %>%  # Filtering out observations where either weight change is negative or there are missing values for before or after weight as the former indicates weighing errors (weight after has been double checked therefore must assume error in weight before), and the latter means k cannot be calculated
+  mutate(green_a = (green_tea_before - green_tea_after) / green_tea_before) %>%  # Calculating decomposable fraction of green tea, ag
+  mutate(green_S = 1 - (green_a/0.842)) %>%  # Calculating stabilisation factor, S
+  mutate(rooibos_a = 0.552 * (1 - green_S)) %>% # Calculating decomposable fraction of rooibos tea, ar
+  mutate(rooibos_wt = rooibos_tea_after/rooibos_tea_before) %>%  # Calculating weight change of rooibos tea
+  mutate(k = (1/days_buried)*log(rooibos_a / (rooibos_wt - (1 - rooibos_a)))) # Calculating decomposition rate constant, k
+```
+
+Saving the dataset: 
+
+```{r}
+#write_csv(decomposition_data, "decomposition_data.csv")
+```
+
+Reading in the data:
+
+```{r}
+decomposition_data <- read_csv("decomposition_data.csv")
+```
+
+# Converting variables to factors
+
+```{r}
+decomposition_data$block <- factor(decomposition_data$block)
+decomposition_data$plot <- factor(decomposition_data$plot)
+decomposition_data$treatment <- factor(decomposition_data$treatment)
+decomposition_data$basalt_present <- factor(decomposition_data$basalt_present)
+decomposition_data$microbiome_present <- factor(decomposition_data$microbiome_present)
+decomposition_data$tree_species <- factor(decomposition_data$tree_species)
+decomposition_data$tree_id <- factor(decomposition_data$tree_id)
+decomposition_data$green_id <- factor(decomposition_data$green_id)
+decomposition_data$rooibos_id <- factor(decomposition_data$rooibos_id)
+decomposition_data$tree_id <- factor(decomposition_data$tree_id)
+```
+
+# Model making, assumption checking and transformations
+
+I will make a mixed-effects linear model to determine whether decomposition rate is affected by treatment or species. 
+
+```{r}
+decomposition_mem <- lmer(k ~ basalt_present * microbiome_present * tree_species + 
+                          (1|block) + (1|plot), data = decomposition_data)
+```
+
+Checking the assumptions of the model:
+
+```{r}
+plot(decomposition_mem)
+qqnorm(resid(decomposition_mem))
+qqline(resid(decomposition_mem))
+```
+
+The assumptions of homogeneity of variance and normality are fairly well met. However, the data shows some signs of heteroscedasticity and non-normality so will check if I need to transform the y variable.
+
+Will do a box-cox test to determine the best fit for the residuals:
+
+```{r}
+boxcox(lm(k ~ basalt_present * microbiome_present * tree_species + 
+                          block + plot, data = decomposition_data))
+```
+
+According to the box plot, the best fit for the residuals is likely to be a log transformation (lambda = 0).
+
+```{r}
+log_decomposition_mem <- lmer(log(k) ~ basalt_present * microbiome_present * tree_species + 
+                          (1|block) + (1|plot), data = decomposition_data)
+```
+
+Checking the assumptions of the model:
+
+```{r}
+plot(log_decomposition_mem)
+qqnorm(resid(log_decomposition_mem))
+qqline(resid(log_decomposition_mem))
+```
+
+When k is logged, the assumptions of homogeneity of variance and normality are much better met, and so I will log these values in my model. 
+
+```{r}
+anova(log_decomposition_mem, type = "I")
+```
+
+There is an almost significant effect of tree species on decomposition rate but no significant effects of the treatments on decomposition rate.
+
+```{r}
+summary(log_decomposition_mem)
+```
+
+The direction of effects for both microbiome innoculation and basalt addition are negative. 
+
+# Species-by-species analysis
+
+Will filter the dataset by species and re-run model.
+
+#Oak
+
+```{r}
+oak_decomposition_data <- decomposition_data %>% 
+  filter(tree_species == "oak")
+```
+
+```{r}
+log_oak_decomposition_mem <- lmer(log(k) ~ basalt_present * microbiome_present + 
+                          (1|block), data = oak_decomposition_data)
+```
+
+```{r}
+anova(log_oak_decomposition_mem, type = "I")
+```
+
+No significant effects
+
+```{r}
+summary(log_oak_decomposition_mem)
+```
+
+
+#Alder
+
+```{r}
+alder_decomposition_data <- decomposition_data %>% 
+  filter(tree_species == "alder")
+```
+
+```{r}
+log_alder_decomposition_mem <- lmer(log(k) ~ basalt_present * microbiome_present + 
+                          (1|block), data = alder_decomposition_data)
+```
+
+```{r}
+anova(log_alder_decomposition_mem, type = "I")
+```
+
+No significant effects.
+
+#Aspen
+
+```{r}
+aspen_decomposition_data <- decomposition_data %>% 
+  filter(tree_species == "aspen")
+```
+
+```{r}
+log_aspen_decomposition_mem <- lmer(log(k) ~ basalt_present * microbiome_present + 
+                          (1|block), data = aspen_decomposition_data)
+```
+
+```{r}
+anova(log_aspen_decomposition_mem, type = "I")
+```
+
+No significant effects.
+
+# Birch
+
+```{r}
+birch_decomposition_data <- decomposition_data %>% 
+  filter(tree_species == "birch")
+```
+
+```{r}
+log_birch_decomposition_mem <- lmer(log(k) ~ basalt_present * microbiome_present + 
+                          (1|block), data = birch_decomposition_data)
+```
+
+```{r}
+anova(log_birch_decomposition_mem, type = "I")
+```
+
+No significant effects.
+
+# Cherry
+
+```{r}
+cherry_decomposition_data <- decomposition_data %>% 
+  filter(tree_species == "cherry")
+```
+
+```{r}
+log_cherry_decomposition_mem <- lmer(log(k) ~ basalt_present * microbiome_present + 
+                          (1|block), data = cherry_decomposition_data)
+```
+
+```{r}
+anova(log_cherry_decomposition_mem, type = "I")
+```
+
+No significant effects.
+
+# Rowan
+
+```{r}
+rowan_decomposition_data <- decomposition_data %>% 
+  filter(tree_species == "rowan")
+```
+
+```{r}
+log_rowan_decomposition_mem <- lmer(log(k) ~ basalt_present * microbiome_present + 
+                          (1|block), data = rowan_decomposition_data)
+```
+
+```{r}
+anova(log_rowan_decomposition_mem, type = "I")
+```
+
+No significant effects.
+
+# Obtaining summary statistics
+
+I will use the marginal effects package to predict means and standard errors.
+
+Loading the marginal effects package:
+
+```{r}
+library(marginaleffects)
+```
+
+Predicting summary statistics from the model grouped by treatment and species:
+
+```{r}
+log_predictions_decomposition_data <- predictions(log_decomposition_mem, by = c("microbiome_present", "basalt_present", "tree_species"))
+log_predictions_decomposition_data
+```
+
+I will now save the predictions dataframe:
+
+```{r}
+#write_csv(log_predictions_decomposition_data, "log_predictions_decomposition_data.csv")
+```
+
+I will read the data back in to view the dataframe as formatting may have changed by saving as a csv file.
+
+```{r}
+log_predictions_decomposition_data <- read_csv("log_predictions_decomposition_data.csv")
+log_predictions_decomposition_data
+```
+
+These predictions are logged so need to I need to back transform (exponentiate and -0.1) the estimates and confidence intervals to get actual estimates: 
+
+```{r}
+predictions_decomposition_data <- log_predictions_decomposition_data %>% 
+  mutate(estimate = exp(estimate),
+         conf.low = exp(conf.low),
+         conf.high = exp(conf.high))
+                  
+predictions_decomposition_data
+```
+
+Saving the dataframe:
+
+```{r}
+#write_csv(predictions_decomposition_data, "predictions_decomposition_data.csv")
+```
+
+# Data visualisation
+
+I will now load in the predictions dataframe to create graphs using ggplot.
+
+```{r}
+predictions_decomposition_data <- read_csv("predictions_decomposition_data.csv")
+predictions_decomposition_data
+```
+
+Adding in a variable for treatment to make plotting easier:
+
+```{r}
+predictions_decomposition_data <- predictions_decomposition_data %>% 
+  mutate(treatment = case_when(
+    basalt_present == "y" & microbiome_present == "y" ~ "basalt+microbiome",
+    basalt_present == "y" & microbiome_present == "n" ~ "basalt",
+    basalt_present == "n" & microbiome_present == "y" ~ "microbiome",
+    basalt_present == "n" & microbiome_present == "n" ~ "control",
+    TRUE ~ NA_character_
+  ))
+
+predictions_decomposition_data
+```
+
+Need to reorder the factor levels within the dataset:
+
+```{r}
+predictions_decomposition_data$treatment <- factor(predictions_decomposition_data$treatment,
+                                                levels = c("control", "basalt", "microbiome", "basalt+microbiome"))
+```
+
+Plotting predicted means and confidence intervals for decomposition rate under different treatments and for different species:
+
+```{r}
+predictions_decomposition_fig1 <- ggplot(predictions_decomposition_data, 
+                                   aes(x = treatment, 
+                                       y = estimate, 
+                                       colour = treatment, group = treatment)) + 
+    geom_errorbar(aes(ymin = conf.low, ymax = conf.high), 
+                  colour="black", width=.2, position = position_dodge(0.1)) +
+    geom_point(position = position_dodge(0.1), size=3) +
+  scale_color_manual(values=c( "forestgreen", "darkorange", "dodgerblue", "deeppink"), 
+                     labels=c("Control", "Basalt", "Microbiome", "Basalt+Microbiome")) +
+  scale_x_discrete(labels = c( "C", "B", "M", "B+M")) +
+  labs(x = "Treatment", y = "Decomposition Rate Constant (k)", title = "Effect of Basalt Addition and Microbiome\nInoculation on Soil Decomposition Rate") +
+  theme_bw() +
+  theme(axis.text.x = element_text(size = 10),  
+        axis.title.x = element_text(size = 14), 
+        strip.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 10),  
+        axis.title.y = element_text(size = 14),  
+        plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+        legend.title=element_blank()) +
+  facet_wrap(~tree_species, scales = "free_y", 
+             labeller = labeller(tree_species = c("alder" = "Alder", 
+                                             "aspen" = "Aspen",
+                                             "birch" = "Birch", 
+                                             "cherry" = "Cherry",
+                                             "oak" = "Oak",
+                                             "rowan" = "Rowan")))
+
+predictions_decomposition_fig1
+```
+
+*Figure 1: Graph showing the effect of basalt addition and microbiome inoculation on the predicted mean percentage of leaf area damaged per branch for different species of tree and their confidence intervals, based on mixed-effects model 1*
+
+This graph shows that there is no clear pattern in decomposition rate constant, k, across different species. Effects are therefore inconsistent and species-specific.
+
+# Obtaining estimates for treatments overall (not by species)
+
+```{r}
+log_predictions_decomposition_data_overall <- predictions(log_decomposition_mem, by = c("microbiome_present", "basalt_present"))
+log_predictions_decomposition_data_overall
+```
+
+I will now save this dataframe:
+
+```{r}
+#write_csv(log_predictions_decomposition_data_overall, "log_predictions_decomposition_data_overall.csv")
+```
+
+Reading in the dataframe:
+
+```{r}
+log_predictions_decomposition_data_overall <- read_csv("log_predictions_decomposition_data_overall.csv")
+log_predictions_decomposition_data_overall
+```
+
+These predictions are logged so need to exponentiate and -0.1 the estimates and confidence intervalues to get actual values:
+
+```{r}
+predictions_decomposition_data_overall <- log_predictions_decomposition_data_overall %>% 
+  mutate(estimate = exp(estimate), 
+         conf.low = exp(conf.low),
+         conf.high = exp(conf.high))
+                  
+predictions_decomposition_data_overall
+```
+
+Saving the dataframe:
+
+```{r}
+#write_csv(predictions_decomposition_data_overall, "predictions_decomposition_data_overall.csv")
+```
+
+I will now load in the predictions dataframe to create graphs using ggplot.
+
+```{r}
+predictions_decomposition_data_overall <- read_csv("predictions_decomposition_data_overall.csv")
+```
+
+Adding in a variable for treatment to make plotting easier:
+
+```{r}
+predictions_decomposition_data_overall <- predictions_decomposition_data_overall %>% 
+  mutate(treatment = case_when(
+    basalt_present == "y" & microbiome_present == "y" ~ "basalt+microbiome",
+    basalt_present == "y" & microbiome_present == "n" ~ "basalt",
+    basalt_present == "n" & microbiome_present == "y" ~ "microbiome",
+    basalt_present == "n" & microbiome_present == "n" ~ "control",
+    TRUE ~ NA_character_
+  ))
+
+predictions_decomposition_data_overall
+```
+
+Need to reorder the factor levels within the dataset:
+
+```{r}
+predictions_decomposition_data_overall$treatment <- factor(predictions_decomposition_data_overall$treatment,
+                                                levels = c("control", "basalt", "microbiome", "basalt+microbiome"))
+```
+
+Plotting predicted means and confidence intervals for decomposition rate under different treatments and for different species:
+
+```{r}
+predictions_decomposition_fig2 <- ggplot(predictions_decomposition_data_overall, 
+                                   aes(x = treatment, 
+                                       y = estimate, 
+                                       colour = treatment, group = treatment)) + 
+    geom_errorbar(aes(ymin = conf.low, ymax = conf.high), 
+                  colour="black", width=.3, linewidth= 0.5, position = position_dodge(0.1)) +
+    geom_point(position = position_dodge(0.1), size=4) +
+  scale_color_manual(values=c( "forestgreen", "darkorange", "dodgerblue", "deeppink"), 
+                     labels=c("Control", "Basalt", "Microbiome", "Basalt+Microbiome")) +
+  scale_x_discrete(labels = c( "C", "B", "M", "B+M")) +
+  labs(x = "Treatment", y = "Decomposition Rate Constant (k)", title = "Soil Decomposition Rate") +
+  theme_bw() +
+  theme(axis.text.x = element_text(size = 10),  
+        axis.title.x = element_text(size = 14), 
+        strip.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 10),  
+        axis.title.y = element_text(size = 14),  
+        plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+        aspect.ratio = 0.9,
+        legend.title=element_blank()) 
+
+predictions_decomposition_fig2
+```
+
+*Figure 2: Graph showing the effect of basalt addition and microbiome inoculation on the overall predicted decomposition rate constant, k, and their confidence intervals, based on mixed-effects model 1*
+
+From the above graph we can see that overall, decomposition rate is not significantly affected by treatment.
+
+# Saving the plots
+
+```{r}
+ggsave("decomposition_species_fig.png", plot = predictions_decomposition_fig1, width = 9, height = 6)
+```
+
+```{r}
+ggsave("decomposition_overall_fig.png", plot = predictions_decomposition_fig2, width = 8, height = 6)
+```
+
+# Determining the effects of microbiome innoculation only
+
+I will now extract the estimates and confidence intervals for microbiome presence and absence only for my results section:
+
+```{r}
+log_predictions_microbiome_decomposition_data <- predictions(log_decomposition_mem, by = c("microbiome_present"))
+log_predictions_microbiome_decomposition_data
+```
+
+Back-transforming estimates and confidence intervals:
+
+```{r}
+predictions_microbiome_decomposition_data <- log_predictions_microbiome_decomposition_data %>% 
+  mutate(estimate = exp(estimate), 
+         conf.low = exp(conf.low),
+         conf.high = exp(conf.high))
+                  
+predictions_microbiome_decomposition_data
+```
+
+Species-specific effects:
+
+```{r}
+log_predictions_microbiome_decomposition_data_species <- predictions(log_decomposition_mem, by = c("microbiome_present", "tree_species"))
+log_predictions_microbiome_decomposition_data_species %>% 
+  arrange(tree_species)
+```
+
+Back-transforming estimates and confidence intervals:
+
+```{r}
+predictions_microbiome_decomposition_data_species <- log_predictions_microbiome_decomposition_data_species %>% 
+  mutate(estimate = exp(estimate), 
+         conf.low = exp(conf.low),
+         conf.high = exp(conf.high))
+                  
+predictions_microbiome_decomposition_data_species
+```
+
+# Determining the effects of basalt addition only
+
+I will now extract the estimates and confidence intervals for basalt presence and absence only for my results section:
+
+```{r}
+log_predictions_basalt_decomposition_data <- predictions(log_decomposition_mem, by = c("basalt_present"))
+log_predictions_basalt_decomposition_data
+```
+
+Back-transforming estimates and confidence intervals:
+
+```{r}
+predictions_basalt_decomposition_data <- log_predictions_basalt_decomposition_data %>% 
+  mutate(estimate = exp(estimate), 
+         conf.low = exp(conf.low),
+         conf.high = exp(conf.high))
+                  
+predictions_basalt_decomposition_data
+```
+
+Species-specific effects:
+
+```{r}
+log_predictions_basalt_decomposition_data_species <- predictions(log_decomposition_mem, by = c("basalt_present", "tree_species"))
+log_predictions_basalt_decomposition_data_species
+```
+
+Back-transforming estimates and confidence intervals:
+
+```{r}
+predictions_basalt_decomposition_data_species <- log_predictions_basalt_decomposition_data_species %>% 
+  mutate(estimate = exp(estimate), 
+         conf.low = exp(conf.low),
+         conf.high = exp(conf.high))
+                  
+predictions_basalt_decomposition_data_species
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

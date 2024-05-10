@@ -1,0 +1,482 @@
+---
+title: "Relative growth rate wrangling and analysis - simple"
+output: html_document
+date: "2024-03-12"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+I have made a simplified script below to show the wrangling and analysis of the relative growth rate tree data. As well as analysing change in height year by year, I am analysing relative growth rate of height.
+
+# Loading packages and data
+
+Loading packages:
+
+```{r}
+library(janitor)
+library(AICcmodavg)
+library(arm)
+library(cowplot)
+library(DAAG)
+library(faraway)
+library(ggfortify)
+library(ggplot2)
+library(lme4)
+library(MASS)
+library(nlme)
+library(quarto)
+library(SemiPar)
+library(Sleuth3)
+library(SMPracticals)
+library(tidyverse)
+library(dplyr)
+library(lmerTest)
+```
+
+Analysis of relative growth rate uses the same tree dataset as analysis of height over each year. I will therefore import the clean tree dataset made in the "trees_simple" dataset.
+
+```{r}
+tree_data_clean <- read_csv("tree_data_clean.csv")
+```
+
+# Calculating absolute and relative growth rates
+
+```{r}
+growth_rate_data <- tree_data_clean %>% 
+  mutate(agr_height = (height_cm_2023 - height_cm_2021)/3) %>% # Adding a column for absolute growth rate of height 2021 to 2023 
+  mutate(log_height_21 = log(height_cm_2021)) %>% # Adding a column for log height 2021
+  mutate(log_height_23 = log(height_cm_2023)) %>% # Adding a column for log height 2023
+  mutate(rgr_height = (log_height_23 - log_height_21) /3) # Adding a column for relative growth rate of height
+```
+
+# Converting factors into variables
+
+```{r}
+growth_rate_data$barcode <- factor(growth_rate_data$barcode)
+growth_rate_data$tree_type <- factor(growth_rate_data$tree_type)
+growth_rate_data$health <- factor(growth_rate_data$health)
+growth_rate_data$cell_plot <- factor(growth_rate_data$cell_plot)
+growth_rate_data$basalt <- factor(growth_rate_data$basalt)
+growth_rate_data$soil_innoculation <- factor(growth_rate_data$soil_innoculation)
+growth_rate_data$group_block <- factor(growth_rate_data$group_block)
+growth_rate_data$treatment <- factor(growth_rate_data$treatment)
+growth_rate_data$dead_10_22 <- factor(growth_rate_data$dead_10_22)
+growth_rate_data$health_10_23 <- factor(growth_rate_data$health_10_23)
+```
+
+
+# Model making and assumption checking
+
+I will make a mixed effects linear model to determine the effect of the treatments on relative growth rate.
+
+```{r}
+rgr_mem <- lmer(rgr_height ~ basalt * soil_innoculation * tree_type + 
+                          (1|group_block) + (1|cell_plot), data = growth_rate_data)
+```
+
+Checking the assumptions of the model:
+
+```{r}
+plot(rgr_mem)
+qqnorm(resid(rgr_mem))
+qqline(resid(rgr_mem))
+```
+
+The assumptions of the model are fairly well met. 
+
+```{r}
+anova(rgr_mem, type = "I")
+```
+
+There is a significant interaction between microbiome inoculation and tree type. There is an almost significant main effect of microbiome inoculation (p = 0.087). The main effect of tree type is highly significant. 
+
+```{r}
+summary(rgr_mem)
+```
+
+The direction of effects for microbiome is negative whilst basalt is positive. 
+
+# Species-by-species analyses
+
+I will now filter the dataset to each species and re-run the model to elucidate species-specific effects.
+
+# Oak
+
+```{r}
+oak_rgr_data <- growth_rate_data %>% 
+  filter(tree_type == "Oak")
+```
+
+```{r}
+oak_rgr_mem <- lmer(rgr_height ~ basalt * soil_innoculation + 
+                          (1|group_block) + (1|cell_plot), data = oak_rgr_data)
+```
+
+```{r}
+anova(oak_rgr_mem, type = "I")
+```
+
+There are no significant effects of the treatments on oak relative growth rate.
+
+```{r}
+summary(oak_rgr_mem)
+```
+
+Positive direction of effects under basalt treatment, negative direction of effects under microbiome treatment for oak.
+
+# Alder
+
+```{r}
+alder_rgr_data <- growth_rate_data %>% 
+  filter(tree_type == "Alder")
+```
+
+```{r}
+alder_rgr_mem <- lmer(rgr_height ~ basalt * soil_innoculation + 
+                          (1|group_block) + (1|cell_plot), data = alder_rgr_data)
+```
+
+```{r}
+anova(alder_rgr_mem, type = "I")
+```
+
+There is an almost significant effect of microbiome treatment on alder relative growth rate (p = 0.06826) but no significant effects of basalt.
+
+```{r}
+summary(alder_rgr_mem)
+```
+
+Positive direction of effects under basalt treatment, negative direction of effects under microbiome treatment for alder.
+
+# Aspen
+
+```{r}
+aspen_rgr_data <- growth_rate_data %>% 
+  filter(tree_type == "Aspen")
+```
+
+```{r}
+aspen_rgr_mem <- lmer(rgr_height ~ basalt * soil_innoculation + 
+                          (1|group_block) + (1|cell_plot), data = aspen_rgr_data)
+```
+
+```{r}
+anova(aspen_rgr_mem, type = "I")
+```
+
+There are no significant effects of the treatments on aspen relative growth rate.
+
+```{r}
+summary(aspen_rgr_mem)
+```
+
+Positive direction of effects under basalt treatment, negative direction of effects under microbiome treatment for aspen.
+
+# Birch
+
+```{r}
+birch_rgr_data <- growth_rate_data %>% 
+  filter(tree_type == "Birch")
+```
+
+```{r}
+birch_rgr_mem <- lmer(rgr_height ~ basalt * soil_innoculation + 
+                          (1|group_block) + (1|cell_plot), data = birch_rgr_data)
+```
+
+```{r}
+anova(birch_rgr_mem, type = "I")
+```
+
+There is an almost significant effect of microbiome inoculation on birch relative growth rate (p = 0.07516).
+
+```{r}
+summary(birch_rgr_mem)
+```
+
+Negative direction of effects under microbiome and basalt treatment for birch.
+
+# Cherry
+
+```{r}
+cherry_rgr_data <- growth_rate_data %>% 
+  filter(tree_type == "Cherry")
+```
+
+```{r}
+cherry_rgr_mem <- lmer(rgr_height ~ basalt * soil_innoculation + 
+                          (1|group_block) + (1|cell_plot), data = cherry_rgr_data)
+```
+
+```{r}
+anova(cherry_rgr_mem, type = "I")
+```
+
+There are no significant effects of the treatments on cherry relative growth rate.
+
+```{r}
+summary(cherry_rgr_mem)
+```
+
+Positive direction of effects under basalt treatment, negative direction of effects under microbiome treatment for cherry.
+
+# Rowan
+
+```{r}
+rowan_rgr_data <- growth_rate_data %>% 
+  filter(tree_type == "Rowan")
+```
+
+```{r}
+rowan_rgr_mem <- lmer(rgr_height ~ basalt * soil_innoculation + 
+                          (1|group_block) + (1|cell_plot), data = rowan_rgr_data)
+```
+
+```{r}
+anova(rowan_rgr_mem, type = "I")
+```
+
+There are no significant effects of the treatments on rowan relative growth rate.
+
+```{r}
+summary(rowan_rgr_mem)
+```
+
+Positive direction of effects under basalt and microbiome treatment for rowan.
+
+# Summary of results
+
+Overall appears that basalt increases relative growth rate and microbiome decreases relative growth rate, but magnitude of effects are species-dependent. Only microbiome effects appear to be significant, and significant varies depending on species. Significant effect of microbiome innoculation overall and almost significant effect of microbiome innoculation for alder and birch. Direction of effects are consistent (except negative direction of effects under basalt treatment for birch trees and positive direction of effects under microbiome treatment for rowan trees) therefore can be fairly sure that these effects exist, but need long-term monitoring to determine how biologically significant these effects will be.
+
+# Extracting summary statistics
+
+I will use the marginal effects package to predict means and standard errors.
+
+```{r}
+library(marginaleffects)
+```
+
+```{r}
+predictions_rgr_data <- predictions(rgr_mem, by = c("soil_innoculation", "basalt", "tree_type"))
+predictions_rgr_data
+```
+
+I will now save this dataframe:
+
+```{r}
+#write_csv(predictions_rgr_data, "predictions_rgr_data.csv")
+```
+
+# Data visualisation
+
+
+This graph shows that mean relative growth rate is mostly slightly higher for basalt plots but this difference is not great.
+
+I will now load in the predictions dataframe to create graphs using ggplot.
+
+```{r}
+predictions_rgr_data <- read_csv("predictions_rgr_data.csv")
+```
+
+Adding in a variable for treatment to make plotting easier:
+
+```{r}
+predictions_rgr_data <- predictions_rgr_data %>% 
+  mutate(treatment = case_when(
+    basalt == "Yes" & soil_innoculation == "Yes" ~ "basalt+microbiome",
+    basalt == "Yes" & soil_innoculation == "No" ~ "basalt",
+    basalt == "No" & soil_innoculation == "Yes" ~ "microbiome",
+    basalt == "No" & soil_innoculation == "No" ~ "control",
+    TRUE ~ NA_character_
+  ))
+
+predictions_rgr_data
+```
+
+Need to reorder the factor levels within the dataset:
+
+```{r}
+predictions_rgr_data$treatment <- factor(predictions_rgr_data$treatment,
+                                                levels = c("control", "basalt", "microbiome", "basalt+microbiome"))
+```
+
+Plotting predicted means and confidence intervals for herbivory score under different treatments and for different species:
+
+```{r}
+predictions_rgr_fig1 <- ggplot(predictions_rgr_data, 
+                                   aes(x = treatment, 
+                                       y = estimate, 
+                                       colour = treatment, group = treatment)) + 
+    geom_errorbar(aes(ymin = conf.low, ymax = conf.high), 
+                  colour="black", width=.2, position = position_dodge(0.1)) +
+    geom_point(position = position_dodge(0.1), size=3) +
+  scale_color_manual(values=c( "forestgreen", "darkorange", "dodgerblue", "deeppink"), 
+                     labels=c("Control", "Basalt", "Microbiome", "Basalt+Microbiome")) +
+  scale_x_discrete(labels = c( "C", "B", "M", "B+M")) +
+  labs(x = "Treatment", y = "Relative Growth Rate", title = "Effect of Basalt Addition and Microbiome\nInoculation on Relative Growth Rate of Tree Height") +
+  theme_bw() +
+  theme(axis.text.x = element_text(size = 10),  
+        axis.title.x = element_text(size = 14), 
+        strip.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 10),  
+        axis.title.y = element_text(size = 14),  
+        plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+        legend.title=element_blank()) +
+  facet_wrap(~tree_type, scales = "free_y")
+
+predictions_rgr_fig1
+```
+
+*Figure 1: Graph showing the effect of basalt addition and microbiome inoculation on the predicted relative growth rate of tree height for different species of tree and their confidence intervals, based on mixed-effects model 1*
+
+From figure 1, we can see that whilst there is generally an increase in RGR under the basalt treatment (except birch) and a decrease in RGR under the microbiome treatment (except rowan), the confidence intervals are large and so these effects are not very significant. 
+
+# Obtaining estimates for treatments overall (not by species)
+
+```{r}
+predictions_rgr_data_overall <- predictions(rgr_mem, by = c("soil_innoculation", "basalt"))
+predictions_rgr_data_overall
+```
+
+I will now save this dataframe:
+
+```{r}
+#write_csv(predictions_rgr_data_overall, "predictions_rgr_data_overall.csv")
+```
+
+Reading in the dataframe:
+
+```{r}
+predictions_rgr_data_overall <- read_csv("predictions_rgr_data_overall.csv")
+predictions_rgr_data_overall
+```
+
+# Data visualisation
+
+Adding in a variable for treatment to make plotting easier:
+
+```{r}
+predictions_rgr_data_overall <- predictions_rgr_data_overall %>% 
+  mutate(treatment = case_when(
+    basalt == "Yes" & soil_innoculation == "Yes" ~ "basalt+microbiome",
+    basalt == "Yes" & soil_innoculation == "No" ~ "basalt",
+    basalt == "No" & soil_innoculation == "Yes" ~ "microbiome",
+    basalt == "No" & soil_innoculation == "No" ~ "control",
+    TRUE ~ NA_character_
+  ))
+```
+
+Need to reorder the factor levels within the dataset:
+
+```{r}
+predictions_rgr_data_overall$treatment <- factor(predictions_rgr_data_overall$treatment,
+                                                levels = c("control", "basalt", "microbiome", "basalt+microbiome"))
+```
+
+Plotting predicted means and confidence intervals for herbivory score under different treatments and for different species:
+
+```{r}
+predictions_rgr_overall_fig1 <- ggplot(predictions_rgr_data_overall, 
+                                   aes(x = treatment, 
+                                       y = estimate, 
+                                       colour = treatment, group = treatment)) + 
+    geom_errorbar(aes(ymin = conf.low, ymax = conf.high), 
+                  colour="black", width=.3, size = 0.5, position = position_dodge(0.1)) +
+    geom_point(position = position_dodge(0.1), size=4) +
+  scale_color_manual(values=c( "forestgreen", "darkorange", "dodgerblue", "deeppink"), 
+                     labels=c("Control", "Basalt", "Microbiome", "Basalt+Microbiome")) +
+  scale_x_discrete(labels = c( "C", "B", "M", "B+M")) +
+  labs(x = "Treatment", y = "Relative Growth Rate", title = "Tree Height") +
+  theme_bw() +
+  theme(axis.text.x = element_text(size = 10),  
+        axis.title.x = element_text(size = 14), 
+        strip.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 10),  
+        axis.title.y = element_text(size = 14),  
+        plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+        aspect.ratio = 0.9,
+        legend.title=element_blank()) 
+
+predictions_rgr_overall_fig1
+```
+
+*Figure 2: Graph showing the effect of basalt addition and microbiome inoculation on the predicted relative growth rate of tree height their confidence intervals, based on mixed-effects model 1*
+
+From the above graph we can see that overall, basalt addition increases RGR whilst microbiome innoculation decreases RGR compared to the control, but confidence intervals are large and so effects may vary.
+
+# Saving the plots
+
+```{r}
+ggsave("rgr_species_fig.png", plot = predictions_rgr_fig1, width = 9, height = 6)
+```
+
+```{r}
+ggsave("rgr_overall_fig.png", plot = predictions_rgr_overall_fig1, width = 8, height = 6)
+```
+
+# Making a simplified table to display results
+
+Will use the kableExtra package for table formatting:
+
+```{r}
+library(kableExtra)
+```
+
+```{r}
+predictions_rgr_data
+```
+
+
+```{r}
+predictions_rgr_table1 <- predictions_rgr_data %>%
+  arrange(tree_type) %>% 
+# Selecting only the variables I need for analysis
+  select(tree_type, soil_innoculation, basalt, treatment, 
+         estimate, std.error, conf.low, conf.high) %>% 
+# Changing the dataset into a more logical order
+  relocate(tree_type, soil_innoculation, basalt, treatment,
+           estimate, std.error, conf.low, conf.high) %>% 
+  mutate_if(is.numeric, round, digits = 2) %>%
+  kable("html", align = "c") %>%
+  kable_styling(full_width = FALSE) 
+
+predictions_rgr_table1
+```
+
+# Obtaining microbiome only summary statistics
+
+```{r}
+predictions_rgr_data_microbiome_overall <- predictions(rgr_mem, by = c("soil_innoculation"))
+predictions_rgr_data_microbiome_overall
+```
+
+Species-by-species predictions
+
+```{r}
+predictions_rgr_data_microbiome <- predictions(rgr_mem, by = c("soil_innoculation", "tree_type"))
+predictions_rgr_data_microbiome %>% 
+  arrange(tree_type)
+```
+
+# Obtaining basalt only summary statistics
+
+```{r}
+predictions_rgr_data_basalt_overall <- predictions(rgr_mem, by = c("basalt"))
+predictions_rgr_data_basalt_overall
+```
+
+Species-by-species predictions
+
+```{r}
+predictions_rgr_data_basalt <- predictions(rgr_mem, by = c("basalt", "tree_type"))
+predictions_rgr_data_basalt %>% 
+  arrange(tree_type)
+```
+
+
+
+
+
+
